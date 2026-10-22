@@ -40,8 +40,33 @@ function Get-VSArch {
     }
 }
 
+function Get-VsDevShellScript {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) {
+        throw "vswhere.exe not found at '$vswhere'. Visual Studio Build Tools are not installed or not present on this runner."
+    }
+
+    $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+    if ([string]::IsNullOrWhiteSpace($installPath)) {
+        $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath 2>$null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($installPath)) {
+        throw "No Visual Studio installation with C++/VC tools was found. Ensure the runner includes VS Build Tools or a VS workload with MSVC."
+    }
+
+    $scriptPath = Join-Path $installPath "Common7\Tools\Launch-VsDevShell.ps1"
+    if (-not (Test-Path $scriptPath)) {
+        throw "Could not find Launch-VsDevShell.ps1 under '$installPath'."
+    }
+
+    return $scriptPath
+}
+
 Push-Location
-& "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1" -Arch (Get-VSArch -Arch $Architecture) -HostArch (Get-VSArch -Arch $OSArchitecture)
+$vsDevShellScript = Get-VsDevShellScript
+Write-Host "Using Visual Studio dev shell: $vsDevShellScript"
+& $vsDevShellScript -Arch (Get-VSArch -Arch $Architecture) -HostArch (Get-VSArch -Arch $OSArchitecture)
 Pop-Location
 
 $target = "$Architecture-pc-windows-msvc"
@@ -166,7 +191,6 @@ function ZipZedAndItsFriendsDebug {
     Compress-Archive -Path $items -DestinationPath ".\$CargoOutDir\zed-$env:RELEASE_VERSION-$env:ZED_RELEASE_CHANNEL.dbg.zip" -Force
 }
 
-
 function UploadToSentry {
     if (-not (Get-Command "sentry-cli" -ErrorAction SilentlyContinue)) {
         Write-Output "sentry-cli not found. skipping sentry upload."
@@ -207,7 +231,6 @@ function MakeAppx {
         }
     }
     Copy-Item -Path "$manifestFile" -Destination "$innoDir\make_appx\AppxManifest.xml"
-    # Add makeAppx.exe to Path
     $sdk = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64"
     $env:Path += ';' + $sdk
     makeAppx.exe pack /d "$innoDir\make_appx" /p "$innoDir\zed_explorer_command_injector.appx" /nv
@@ -223,17 +246,13 @@ function SignZedAndItsFriends {
 }
 
 function DownloadAMDGpuServices {
-    # If you update the AGS SDK version, please also update the version in `crates/gpui/src/platform/windows/directx_renderer.rs`
     $url = "https://codeload.github.com/GPUOpen-LibrariesAndSDKs/AGS_SDK/zip/refs/tags/v6.3.0"
     $zipPath = ".\AGS_SDK_v6.3.0.zip"
-    # Download the AGS SDK zip file
     Invoke-WebRequest -Uri $url -OutFile $zipPath
-    # Extract the AGS SDK zip file
     Expand-Archive -Path $zipPath -DestinationPath "." -Force
 }
 
 function DownloadConpty {
-    # TODO: Switch back to the stable channel once Microsoft finally decides to publish v1.26
     $url = "https://github.com/microsoft/terminal/releases/download/v1.25.1912.0/Microsoft.Windows.Console.ConPTY.1.25.260710002-preview.nupkg"
     $zipPath = ".\Microsoft.Windows.Console.ConPTY.1.25.260710002-preview.nupkg"
     Invoke-WebRequest -Uri $url -OutFile $zipPath
@@ -270,7 +289,6 @@ function BuildInstaller {
             $appName = "Zed"
             $appDisplayName = "Zed"
             $appSetupName = "Zed-$Architecture"
-            # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
             $appMutex = "Zed-Stable-Instance-Mutex"
             $appExeName = "Zed"
             $regValueName = "Zed"
@@ -284,7 +302,6 @@ function BuildInstaller {
             $appName = "Zed Preview"
             $appDisplayName = "Zed Preview"
             $appSetupName = "Zed-$Architecture"
-            # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
             $appMutex = "Zed-Preview-Instance-Mutex"
             $appExeName = "Zed"
             $regValueName = "ZedPreview"
@@ -298,7 +315,6 @@ function BuildInstaller {
             $appName = "Zed Nightly"
             $appDisplayName = "Zed Nightly"
             $appSetupName = "Zed-$Architecture"
-            # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
             $appMutex = "Zed-Nightly-Instance-Mutex"
             $appExeName = "Zed"
             $regValueName = "ZedNightly"
@@ -312,7 +328,6 @@ function BuildInstaller {
             $appName = "Zed Dev"
             $appDisplayName = "Zed Dev"
             $appSetupName = "Zed-$Architecture"
-            # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
             $appMutex = "Zed-Dev-Instance-Mutex"
             $appExeName = "Zed"
             $regValueName = "ZedDev"
@@ -326,9 +341,6 @@ function BuildInstaller {
         }
     }
 
-    # Windows runner 2022 default has iscc in PATH, https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md
-    # Currently, we are using Windows 2022 runner.
-    # Windows runner 2025 doesn't have iscc in PATH for now, https://github.com/actions/runner-images/issues/11228
     $innoSetupPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 
     $definitions = @{
@@ -356,13 +368,11 @@ function BuildInstaller {
 
     $innoArgs = @($issFilePath) + $defs
     if($canCodeSign) {
-        # Checked by zed.iss to decide whether to sign the installer.
         $env:ZED_SIGN_BUNDLE = "1"
         $signTool = "powershell.exe -ExecutionPolicy Bypass -File $innoDir\sign.ps1 `$f"
         $innoArgs += "/sDefaultsign=`"$signTool`""
     }
 
-    # Execute Inno Setup
     Write-Host "🚀 Running Inno Setup: $innoSetupPath $innoArgs"
     $process = Start-Process -FilePath $innoSetupPath -ArgumentList $innoArgs -NoNewWindow -Wait -PassThru
 
