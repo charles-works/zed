@@ -16,27 +16,47 @@ New-Item -Path "$outputFile" -ItemType File -Value "" -Force
 ) | Add-Content -Path $outputFile
 
 $needsInstall = $false
+$oldTargetRustflags = $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS
+$oldRustflags = $env:RUSTFLAGS
+
 try {
-    $versionOutput = cargo about --version
-    if (-not ($versionOutput -match "cargo-about $CARGO_ABOUT_VERSION")) {
+    $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = ""
+    $env:RUSTFLAGS = ""
+
+    try {
+        $versionOutput = cargo about --version
+        if (-not ($versionOutput -match "cargo-about $CARGO_ABOUT_VERSION")) {
+            $needsInstall = $true
+        } else {
+            Write-Host "cargo-about@$CARGO_ABOUT_VERSION is already installed"
+        }
+    } catch {
         $needsInstall = $true
-    } else {
-        Write-Host "cargo-about@$CARGO_ABOUT_VERSION is already installed"
     }
-} catch {
-    $needsInstall = $true
+
+    if ($needsInstall) {
+        Write-Host "Installing cargo-about@$CARGO_ABOUT_VERSION..."
+        cargo install "cargo-about@$CARGO_ABOUT_VERSION"
+    }
+
+    Write-Host "Generating cargo licenses"
+
+    $failFlag = $env:ALLOW_MISSING_LICENSES ? "--fail" : ""
+    $args = @('about', 'generate', $failFlag, '-c', 'script/licenses/zed-licenses.toml', $templateFile, '-o', $outputFile) | Where-Object { $_ }
+    cargo @args
+} finally {
+    if ($oldTargetRustflags -eq $null) {
+        Remove-Item Env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS -ErrorAction SilentlyContinue
+    } else {
+        $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = $oldTargetRustflags
+    }
+
+    if ($oldRustflags -eq $null) {
+        Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
+    } else {
+        $env:RUSTFLAGS = $oldRustflags
+    }
 }
-
-if ($needsInstall) {
-    Write-Host "Installing cargo-about@$CARGO_ABOUT_VERSION..."
-    cargo install "cargo-about@$CARGO_ABOUT_VERSION"
-}
-
-Write-Host "Generating cargo licenses"
-
-$failFlag = $env:ALLOW_MISSING_LICENSES ? "--fail" : ""
-$args = @('about', 'generate', $failFlag, '-c', 'script/licenses/zed-licenses.toml', $templateFile, '-o', $outputFile) | Where-Object { $_ }
-cargo @args
 
 Write-Host "Applying replacements"
 $replacements = @{
