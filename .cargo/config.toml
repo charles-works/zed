@@ -11,9 +11,10 @@ perf-compare = ["run", "--profile", "release-fast", "-p", "perf", "--config", "t
 [target.'cfg(target_os = "windows")']
 rustflags = [
     "--cfg",
-    "windows_slim_errors",        # This cfg will reduce the size of `windows::core::Error` from 16 bytes to 4 bytes
-    "-C",
-    "target-feature=+crt-static", # This fixes the linking issue when compiling livekit on Windows
+    "windows_slim_errors", # This cfg will reduce the size of `windows::core::Error` from 16 bytes to 4 bytes
+    # NOTE: Do not force `target-feature=+crt-static` here. It can mix a static MSVC runtime
+    # (MT_StaticRelease) with a dependency that is linked against the dynamic CRT (MD_DynamicRelease),
+    # which causes LNK2038/LNK2005 failures in Windows builds such as `libwebrtc_sys`.
 ]
 
 # We need lld to link libwebrtc.a successfully on aarch64-linux
